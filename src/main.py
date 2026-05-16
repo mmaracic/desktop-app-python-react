@@ -1,6 +1,7 @@
 """Desktop application entry point combining FastAPI, uvicorn, and pywebview."""
 
 import uvicorn
+import threading
 import webview
 from fastapi import FastAPI
 from src.api import root
@@ -21,10 +22,14 @@ def _run_backend_server() -> None:
 
 
 def main() -> None:
-    """Launch the desktop window with the embedded FastAPI server."""
+    """Python application shuts down when only daemon threads are running.
+    Running the backend server in a daemon thread rather than in webview start method
+    allows the application to exit gracefully when the webview window is closed."""
+    thread = threading.Thread(target=_run_backend_server, daemon=True)
+    thread.start()
 
     webview.create_window("Hello world", APP_URL)
-    webview.start(_run_backend_server)
+    webview.start()
 
 
 if __name__ == "__main__":
