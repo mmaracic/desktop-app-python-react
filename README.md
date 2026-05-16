@@ -12,5 +12,5 @@ uv sync
 ## Run
 Run the application with:
 ```bash
-uv run main.py
+uv run -m src.main
 ```
