@@ -6,6 +6,7 @@ import logging
 from pydantic import BaseModel
 import uvicorn
 from src.colored_log_formatter import ColoredLogFormatter
+from src.dev_proxy import _dev_proxy
 import threading
 import webview
 from fastapi import FastAPI
@@ -27,12 +28,11 @@ class Config(BaseModel):
 
     host: str = "127.0.0.1"
     port: int = 5000
-    no_frontend: bool = False
+    dev: bool = False
 
 
 app = FastAPI()
-app.include_router(api.router)
-app.mount("/", StaticFiles(directory="react/dist", html=True))
+app.include_router(api.router, prefix="/api")
 
 
 def _run_backend_server(config: Config) -> None:
@@ -54,22 +54,25 @@ def parse_args() -> Config:
         "--port", type=int, default=5000, help="Port for the backend server"
     )
     parser.add_argument(
-        "--no-frontend",
-        type=bool,
-        default=False,
-        help="Disable the frontend window, default is False",
+        "--dev",
+        action="store_true",
+        help="Run in development mode, pointing the webview at the Vite dev server",
     )
     args = parser.parse_args()
-    return Config(host=args.host, port=args.port, no_frontend=args.no_frontend)
+    return Config(host=args.host, port=args.port, dev=args.dev)
 
 
 def main() -> None:
     """Main entry point for the application."""
     config = parse_args()
 
-    if config.no_frontend:
-        _run_backend_server(config)
-        return
+    if not config.dev:
+        app.mount("/", StaticFiles(directory="react/dist", html=True))
+    else:
+        app.add_api_route("/", _dev_proxy, methods=["GET", "HEAD", "OPTIONS"])
+        app.add_api_route(
+            "/{path:path}", _dev_proxy, methods=["GET", "HEAD", "OPTIONS"]
+        )
 
     # Python application shuts down when only daemon threads are running.
     # Running the backend server in a daemon thread rather than in webview start method

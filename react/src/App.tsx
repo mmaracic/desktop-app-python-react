@@ -10,7 +10,7 @@ function App() {
   const [greeting, setGreeting] = useState<string>('')
 
   useEffect(() => {
-    axios.get<{ message: string }>('/hello').then((r) => setGreeting(r.data.message))
+    axios.get<{ message: string }>('/api/hello').then((r) => setGreeting(r.data.message))
   }, [])
 
   return (
