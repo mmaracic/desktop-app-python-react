@@ -3,13 +3,25 @@
 Python desktop application with React Typescript UI using PyWebView.  
 https://pywebview.flowrl.com/
 
-
 ## Setup
-Run the following command to install the dependencies:
+Run the following command to install the backend dependencies:
 ```bash
 uv sync
 ```
+
+Run the following command to install the frontend dependencies:
+```bash
+cd frontend
+npm install
+```
+
 ## Run
+Build the frontend with:
+```bash
+cd frontend
+npm run build
+```
+
 Run the application with:
 ```bash
 uv run -m src.main
