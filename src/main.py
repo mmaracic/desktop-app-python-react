@@ -1,16 +1,20 @@
 """Desktop application entry point combining FastAPI, uvicorn, and pywebview."""
 
 import argparse
-from fastapi.staticfiles import StaticFiles
+import asyncio
 import logging
-from pydantic import BaseModel
-import uvicorn
-from src.colored_log_formatter import ColoredLogFormatter
-from src.dev_proxy import _dev_proxy
 import threading
+from threading import Semaphore
+
+import uvicorn
 import webview
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
 from src.api import api
+from src.colored_log_formatter import ColoredLogFormatter
+from src.dev_proxy import _dev_proxy
 
 log_handler = logging.StreamHandler()
 log_handler.setFormatter(
@@ -35,13 +39,27 @@ app = FastAPI()
 app.include_router(api.router, prefix="/api")
 
 
-def _run_backend_server(config: Config) -> None:
-    """Start the uvicorn server in a background thread."""
+async def _run_backend_server(config: Config, sem: Semaphore) -> None:
+    """Start the uvicorn server in a background thread with a semaphore to block main thread until the server is ready."""
     uvicorn_config = uvicorn.Config(
         app, host=config.host, port=config.port, log_level="info", log_config=None
     )
     server = uvicorn.Server(uvicorn_config)
-    server.run()
+    logger.info("Starting backend server at http://%s:%d", config.host, config.port)
+    server_task = asyncio.create_task(server.serve())
+
+    # Wait until Uvicorn explicitly flags that it's ready
+    while not server.started:
+        await asyncio.sleep(0.1)
+
+    logger.info(
+        "Backend server is ready and running at http://%s:%d",
+        config.host,
+        config.port,
+    )
+    sem.release()  # Release the semaphore to unblock the main thread
+
+    await server_task
 
 
 def parse_args() -> Config:
@@ -74,14 +92,18 @@ def main() -> None:
             "/{path:path}", _dev_proxy, methods=["GET", "HEAD", "OPTIONS"]
         )
 
+    sem = Semaphore(0)  # Semaphore to block main thread until the server is ready
     # Python application shuts down when only daemon threads are running.
     # Running the backend server in a daemon thread rather than in webview start method
     # allows the application to exit gracefully when the webview window is closed.
-    thread = threading.Thread(target=_run_backend_server, args=(config,), daemon=True)
+    thread = threading.Thread(
+        target=lambda: asyncio.run(_run_backend_server(config, sem)), daemon=True
+    )
     thread.start()
+    sem.acquire()  # Block main thread until the server is ready
 
     server = f"http://{config.host}:{config.port}"
-    logger.info("Backend server starting at %s", server)
+    logger.info("Connecting to backend server at %s", server)
     window = webview.create_window("Hello world", server)
     if window is None:
         logger.error("Failed to create webview window, shutting down backend server...")
