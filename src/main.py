@@ -9,6 +9,7 @@ from threading import Semaphore
 import uvicorn
 import webview
 from fastapi import FastAPI
+from fastapi.concurrency import asynccontextmanager
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -35,16 +36,29 @@ class Config(BaseModel):
     dev: bool = False
 
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Lifespan context manager for the FastAPI application.
+    """
+    logger.info("Starting FastAPI application...")
+    yield
+    logger.info("Shutting down FastAPI application...")
+
+
+app = FastAPI(lifespan=lifespan)
 app.include_router(api.router, prefix="/api")
 
 
-async def _run_backend_server(config: Config, sem: Semaphore) -> None:
+async def _run_backend_server(
+    config: Config, sem: Semaphore, server_holder: list[uvicorn.Server]
+) -> None:
     """Start the uvicorn server in a background thread with a semaphore to block main thread until the server is ready."""
     uvicorn_config = uvicorn.Config(
         app, host=config.host, port=config.port, log_level="info", log_config=None
     )
     server = uvicorn.Server(uvicorn_config)
+    server_holder.append(server)  # Store the server instance in the list
     logger.info("Starting backend server at http://%s:%d", config.host, config.port)
     server_task = asyncio.create_task(server.serve())
 
@@ -92,25 +106,32 @@ def main() -> None:
             "/{path:path}", _dev_proxy, methods=["GET", "HEAD", "OPTIONS"]
         )
 
+    server_holder: list[uvicorn.Server] = []  # List to hold the server instance
     sem = Semaphore(0)  # Semaphore to block main thread until the server is ready
     # Python application shuts down when only daemon threads are running.
     # Running the backend server in a daemon thread rather than in webview start method
     # allows the application to exit gracefully when the webview window is closed.
     thread = threading.Thread(
-        target=lambda: asyncio.run(_run_backend_server(config, sem)), daemon=True
+        target=lambda: asyncio.run(_run_backend_server(config, sem, server_holder)),
+        daemon=True,
     )
     thread.start()
     sem.acquire()  # Block main thread until the server is ready
 
-    server = f"http://{config.host}:{config.port}"
-    logger.info("Connecting to backend server at %s", server)
-    window = webview.create_window("Hello world", server)
+    server_url = f"http://{config.host}:{config.port}"
+    logger.info("Connecting to backend server at %s", server_url)
+    window = webview.create_window("Hello world", server_url)
     if window is None:
         logger.error("Failed to create webview window, shutting down backend server...")
         return
     window.events.shown += lambda: logger.info("Webview window is now visible")
     webview.start()
+
     logger.info("Webview window closed, shutting down backend server...")
+    # Signal uvicorn to exit gracefully so the FastAPI lifespan shutdown runs.
+    backend_server = server_holder[0]
+    backend_server.should_exit = True
+    thread.join(timeout=10)
 
 
 if __name__ == "__main__":
