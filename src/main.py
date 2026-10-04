@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import logging
+import random
 import threading
 from threading import Semaphore
 
@@ -27,12 +28,15 @@ log_handler.setFormatter(
 logging.basicConfig(level=logging.INFO, handlers=[log_handler])
 logger = logging.getLogger(__name__)
 
+MIN_PORT = 49152
+MAX_PORT = 65535
+
 
 class Config(BaseModel):
     """Configuration for the application."""
 
     host: str = "127.0.0.1"
-    port: int = 5000
+    port: int | None = None
     dev: bool = False
 
 
@@ -55,7 +59,11 @@ async def _run_backend_server(
 ) -> None:
     """Start the uvicorn server in a background thread with a semaphore to block main thread until the server is ready."""
     uvicorn_config = uvicorn.Config(
-        app, host=config.host, port=config.port, log_level="info", log_config=None
+        app,
+        host=config.host,
+        port=config.port or MIN_PORT,
+        log_level="info",
+        log_config=None,
     )
     server = uvicorn.Server(uvicorn_config)
     server_holder.append(server)  # Store the server instance in the list
@@ -76,6 +84,30 @@ async def _run_backend_server(
     await server_task
 
 
+def _is_port_available(port: int) -> bool:
+    """Check if a port is available for binding."""
+    import socket
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("127.0.0.1", port))
+        return True
+    finally:
+        sock.close()
+
+
+def _modify_port_config(config: Config) -> Config:
+    """Modify the port in the Config object if it is not specified, handling auto-port selection."""
+    if config.port is None:
+        port = random.randint(MIN_PORT, MAX_PORT)  # noqa: S2245
+
+        # Retry with another random port if the first one is taken
+        if not _is_port_available(port):
+            port = random.randint(MIN_PORT, MAX_PORT)  # noqa: S2245
+        config.port = port
+    return config
+
+
 def parse_args() -> Config:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Agentic desktop application")
@@ -83,7 +115,7 @@ def parse_args() -> Config:
         "--host", type=str, default="127.0.0.1", help="Host for the backend server"
     )
     parser.add_argument(
-        "--port", type=int, default=5000, help="Port for the backend server"
+        "--port", type=int, default=None, help="Port for the backend server"
     )
     parser.add_argument(
         "--dev",
@@ -97,6 +129,8 @@ def parse_args() -> Config:
 def main() -> None:
     """Main entry point for the application."""
     config = parse_args()
+
+    config = _modify_port_config(config)
 
     if not config.dev:
         app.mount("/", StaticFiles(directory="react/dist", html=True))
